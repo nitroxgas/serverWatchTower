@@ -1,0 +1,2 @@
+# m h  dom mon dow   command
+0 * * * * /usr/bin/env bash -lc '/path/to/serverWatchTower/bin/watchtower --inventory /path/to/serverWatchTower/etc/inventory.csv --config /path/to/serverWatchTower/etc/watchtower.conf --dry-run >> /var/log/watchtower.log 2>&1'

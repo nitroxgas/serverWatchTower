@@ -1,0 +1,2 @@
+id,address,ssh_user,ssh_port,tags
+example-1,127.0.0.1,$USER,22,env=dev;role=test

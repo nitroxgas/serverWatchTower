@@ -1,0 +1,381 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -f "$REPO_ROOT/lib/common.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/common.sh"
+else
+  echo "ERROR: missing lib/common.sh" >&2
+  exit 4
+fi
+
+if [[ -f "$REPO_ROOT/lib/inventory.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/inventory.sh"
+else
+  echo "ERROR: missing lib/inventory.sh" >&2
+  exit 4
+fi
+
+if [[ -f "$REPO_ROOT/lib/collect.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/collect.sh"
+else
+  echo "ERROR: missing lib/collect.sh" >&2
+  exit 4
+fi
+
+if [[ -f "$REPO_ROOT/lib/retention.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/retention.sh"
+else
+  echo "ERROR: missing lib/retention.sh" >&2
+  exit 4
+fi
+
+if [[ -f "$REPO_ROOT/lib/analyze.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/analyze.sh"
+else
+  echo "ERROR: missing lib/analyze.sh" >&2
+  exit 4
+fi
+
+if [[ -f "$REPO_ROOT/lib/report.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/report.sh"
+else
+  echo "ERROR: missing lib/report.sh" >&2
+  exit 4
+fi
+
+if [[ -f "$REPO_ROOT/lib/alert.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/alert.sh"
+else
+  echo "ERROR: missing lib/alert.sh" >&2
+  exit 4
+fi
+
+if [[ -f "$REPO_ROOT/lib/ai.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/lib/ai.sh"
+else
+  echo "ERROR: missing lib/ai.sh" >&2
+  exit 4
+fi
+
+usage() {
+  cat <<'USAGE'
+Usage: watchtower [--inventory <path>] [--config <path>] [--out-dir <path>] [--host <id>] [--tags <k=v,...>] [--since <duration>] [--no-ai] [--no-email] [--dry-run] [--json] [--verbose]
+USAGE
+}
+
+INVENTORY=""
+CONFIG=""
+OUT_DIR=""
+HOST_ONLY=""
+TAGS_FILTER=""
+SINCE=""
+NO_AI=0
+NO_EMAIL=0
+DRY_RUN=0
+JSON_OUT=0
+VERBOSE=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --inventory)
+      INVENTORY="${2:-}"; shift 2
+      ;;
+    --config)
+      CONFIG="${2:-}"; shift 2
+      ;;
+    --out-dir)
+      OUT_DIR="${2:-}"; shift 2
+      ;;
+    --host)
+      HOST_ONLY="${2:-}"; shift 2
+      ;;
+    --tags)
+      TAGS_FILTER="${2:-}"; shift 2
+      ;;
+    --since)
+      SINCE="${2:-}"; shift 2
+      ;;
+    --no-ai)
+      NO_AI=1; shift
+      ;;
+    --no-email)
+      NO_EMAIL=1; shift
+      ;;
+    --dry-run)
+      DRY_RUN=1; shift
+      ;;
+    --json)
+      JSON_OUT=1; shift
+      ;;
+    --verbose)
+      VERBOSE=1; shift
+      ;;
+    *)
+      echo "ERROR: unknown argument: $1" >&2
+      usage >&2
+      exit 4
+      ;;
+  esac
+done
+
+if [[ -z "$INVENTORY" ]]; then
+  if [[ -f "$REPO_ROOT/etc/inventory.csv" ]]; then
+    INVENTORY="$REPO_ROOT/etc/inventory.csv"
+  else
+    echo "ERROR: --inventory is required" >&2
+    exit 4
+  fi
+fi
+
+if [[ -z "$CONFIG" ]]; then
+  if [[ -f "$REPO_ROOT/etc/watchtower.conf" ]]; then
+    CONFIG="$REPO_ROOT/etc/watchtower.conf"
+  fi
+fi
+
+if [[ -n "$CONFIG" ]]; then
+  load_config "$CONFIG"
+fi
+
+log_info "watchtower bootstrap ok"
+log_info "inventory=$INVENTORY"
+log_info "config=${CONFIG:-<none>}"
+log_info "out_dir=${OUT_DIR:-<default>}"
+log_info "host=${HOST_ONLY:-<all>}"
+log_info "tags=${TAGS_FILTER:-<none>}"
+log_info "since=${SINCE:-<default>}"
+log_info "no_ai=$NO_AI no_email=$NO_EMAIL dry_run=$DRY_RUN json=$JSON_OUT verbose=$VERBOSE"
+
+if [[ $DRY_RUN -eq 1 ]]; then
+  RUN_ID="$(generate_run_id)"
+  RUN_DIR="$(create_run_dir "$REPO_ROOT" "$OUT_DIR" "$RUN_ID")"
+
+  LOCK_FILE="$REPO_ROOT/$LOCK_DIR/watchtower.lock"
+  if ! acquire_lock "$LOCK_FILE"; then
+    echo "ERROR: another watchtower run appears to be in progress (lock: $LOCK_FILE)" >&2
+    exit 4
+  fi
+  trap 'release_lock "$LOCK_FILE"' EXIT
+
+  INVENTORY_COUNT=0
+  while IFS= read -r _line || [[ -n "${_line:-}" ]]; do
+    INVENTORY_COUNT=$((INVENTORY_COUNT + 1))
+  done < <(inventory_parse "$INVENTORY" "$HOST_ONLY" "$TAGS_FILTER")
+
+  if [[ $JSON_OUT -eq 1 ]]; then
+    printf '{"status":"ok","dry_run":true,"run_id":"%s","run_dir":"%s","inventory":"%s","inventory_count":%d}\n' \
+      "$RUN_ID" "$RUN_DIR" "$INVENTORY" "$INVENTORY_COUNT"
+  else
+    echo "OK (dry-run)."
+    echo "run_id: $RUN_ID"
+    echo "run_dir: $RUN_DIR"
+    echo "inventory_count: $INVENTORY_COUNT"
+  fi
+  exit 0
+fi
+
+RUN_ID="$(generate_run_id)"
+RUN_DIR="$(create_run_dir "$REPO_ROOT" "$OUT_DIR" "$RUN_ID")"
+
+LOCK_FILE="$REPO_ROOT/$LOCK_DIR/watchtower.lock"
+if ! acquire_lock "$LOCK_FILE"; then
+  echo "ERROR: another watchtower run appears to be in progress (lock: $LOCK_FILE)" >&2
+  exit 4
+fi
+trap 'release_lock "$LOCK_FILE"' EXIT
+
+report_path="$(report_init "$RUN_DIR" "$RUN_ID")"
+report_write_run_metadata "$RUN_DIR" "$RUN_ID" "$INVENTORY"
+
+total=0
+healthy=0
+warning=0
+critical=0
+failed=0
+worst=0
+
+while IFS= read -r row || [[ -n "${row:-}" ]]; do
+  total=$((total + 1))
+
+  IFS=',' read -r host_id address ssh_user ssh_port tags <<<"$row"
+  host_id="${host_id//[$'\r\n\t ']/}"
+  address="${address//[$'\r\n\t ']/}"
+
+  if [[ -z "$host_id" || -z "$address" ]]; then
+    failed=$((failed + 1))
+    worst=3
+    continue
+  fi
+
+  log_info "collecting host=$host_id address=$address"
+
+  if ! collect_check_connectivity "$RUN_DIR" "$host_id" "$address" "${ssh_user:-}" "${ssh_port:-}" "$SSH_CONNECT_TIMEOUT_SECS" 15; then
+    failed=$((failed + 1))
+    if [[ $worst -lt 1 ]]; then worst=1; fi
+
+    err_path="$RUN_DIR/hosts/$host_id/artifacts/connectivity.err.txt"
+    err_msg="ssh connectivity failed"
+    if [[ -f "$err_path" ]]; then
+      err_msg="$(tail -n 5 "$err_path" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | sed 's/[[:space:]]$//')"
+      [[ -z "$err_msg" ]] && err_msg="ssh connectivity failed"
+    fi
+
+    write_unreachable_summary "$RUN_DIR" "$host_id" "$err_msg"
+    report_append_host "$report_path" "$RUN_DIR" "$host_id"
+    continue
+  fi
+
+  collect_us1_signals "$RUN_DIR" "$host_id" "$address" "${ssh_user:-}" "${ssh_port:-}" "$SSH_CONNECT_TIMEOUT_SECS" "$SSH_COMMAND_TIMEOUT_SECS" "$LOG_WINDOW"
+
+  st="$(analyze_host "$RUN_DIR" "$host_id")"
+  case "$st" in
+    Healthy)
+      healthy=$((healthy + 1))
+      ;;
+    Warning)
+      warning=$((warning + 1))
+      if [[ $worst -lt 1 ]]; then worst=1; fi
+      ;;
+    Critical)
+      critical=$((critical + 1))
+      if [[ $worst -lt 2 ]]; then worst=2; fi
+      ;;
+    *)
+      failed=$((failed + 1))
+      if [[ $worst -lt 1 ]]; then worst=1; fi
+      ;;
+  esac
+
+  report_append_host "$report_path" "$RUN_DIR" "$host_id"
+done < <(inventory_parse "$INVENTORY" "$HOST_ONLY" "$TAGS_FILTER")
+
+report_append_fleet_summary "$report_path" "$total" "$healthy" "$warning" "$critical" "$failed"
+
+ai_failed=0
+if [[ $NO_AI -eq 0 && "${AI_ENABLED:-false}" == "true" ]]; then
+  if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+    echo "ERROR: AI enabled but OPENAI_API_KEY is not set" >&2
+    exit 4
+  fi
+
+  log_info "AI enabled: generating AI summary"
+  if ai_text="$(ai_chatgpt_summarize_run "$RUN_DIR" 2>/dev/null)"; then
+    if [[ -n "${ai_text:-}" ]]; then
+      report_append_ai_summary "$report_path" "$ai_text"
+    else
+      log_warn "AI summary returned empty output"
+    fi
+  else
+    ai_failed=1
+    log_warn "AI summary failed; continuing without AI section"
+  fi
+fi
+
+previous_run_id=""
+if previous_run_id="$(state_read_last_run_id "$REPO_ROOT/$STATE_DIR" 2>/dev/null)"; then
+  :
+else
+  previous_run_id=""
+fi
+
+warnings_kv=""
+new_warning_hosts=""
+critical_hosts=""
+
+if [[ $critical -gt 0 ]]; then
+  critical_hosts="(see report for details)"
+fi
+
+new_warning_count=0
+for d in "$RUN_DIR/hosts"/*; do
+  [[ -d "$d" ]] || continue
+  host_id="$(basename "$d")"
+  summary_path="$d/summary.json"
+  [[ -f "$summary_path" ]] || continue
+
+  host_status="$(grep -E '"status"' "$summary_path" | head -n1 | sed -E 's/.*"status"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || echo "")"
+
+  if [[ "$host_status" == "Warning" ]]; then
+    fp="$(warning_fingerprint_from_summary "$summary_path" || echo "")"
+    if [[ -n "$fp" ]]; then
+      kv="\"$(json_escape "$host_id")\":\"$(json_escape "$fp")\""
+      if [[ -z "$warnings_kv" ]]; then
+        warnings_kv="$kv"
+      else
+        warnings_kv+=" ,$kv"
+      fi
+
+      if [[ -n "$previous_run_id" ]]; then
+        old_fp="$(state_read_warning_fingerprint "$REPO_ROOT/$STATE_DIR" "$host_id" 2>/dev/null || echo "")"
+        if [[ -z "$old_fp" || "$old_fp" != "$fp" ]]; then
+          new_warning_hosts+="$host_id\n"
+          new_warning_count=$((new_warning_count + 1))
+        fi
+      fi
+    fi
+  fi
+done
+
+if [[ -z "$previous_run_id" ]]; then
+  new_warning_count=0
+  new_warning_hosts=""
+fi
+
+email_failed=0
+if [[ "$EMAIL_ENABLED" == "true" && $NO_EMAIL -eq 0 ]]; then
+  if [[ $critical -gt 0 || $new_warning_count -gt 0 ]]; then
+    subject="$(build_alert_subject "$EMAIL_SUBJECT_PREFIX" "$RUN_ID" "$critical" "$new_warning_count")"
+    body="$(build_alert_body "$RUN_ID" "$RUN_DIR" "$report_path" "${critical_hosts:-}" "${new_warning_hosts:-}")"
+    if ! send_email "$EMAIL_TO" "$subject" "$body" "$EMAIL_FROM"; then
+      echo "ERROR: failed to send email alert" >&2
+      email_failed=1
+    fi
+  fi
+fi
+
+if [[ $email_failed -eq 0 ]]; then
+  state_write_last_run_with_warnings "$REPO_ROOT/$STATE_DIR" "$RUN_ID" "$warnings_kv"
+fi
+
+if [[ $JSON_OUT -eq 1 ]]; then
+  printf '{"status":"ok","run_id":"%s","run_dir":"%s","total":%d,"healthy":%d,"warning":%d,"critical":%d,"failed":%d,"report":"%s","ai_enabled":%s,"ai_failed":%s}\n' \
+    "$RUN_ID" "$RUN_DIR" "$total" "$healthy" "$warning" "$critical" "$failed" "$report_path" \
+    "$( [[ $NO_AI -eq 0 && "${AI_ENABLED:-false}" == "true" ]] && echo true || echo false )" \
+    "$( [[ ${ai_failed:-0} -eq 1 ]] && echo true || echo false )"
+else
+  echo "run_id: $RUN_ID"
+  echo "run_dir: $RUN_DIR"
+  echo "report: $report_path"
+fi
+
+if [[ $email_failed -eq 1 ]]; then
+  exit 4
+fi
+
+if [[ $critical -gt 0 ]]; then
+  exit 2
+fi
+
+if [[ $failed -gt 0 ]]; then
+  exit 3
+fi
+
+if [[ $warning -gt 0 ]]; then
+  exit 1
+fi
+
+exit 0
