@@ -36,6 +36,28 @@ collect_write_artifact() {
   printf '%s\n' "$out"
 }
 
+ssh_supports_accept_new() {
+  if [[ -n "${_WT_SSH_ACCEPT_NEW_SUPPORTED:-}" ]]; then
+    [[ "${_WT_SSH_ACCEPT_NEW_SUPPORTED}" == "1" ]]
+    return
+  fi
+
+  require_cmd ssh
+
+  if ssh -G 127.0.0.1 -o BatchMode=yes -o StrictHostKeyChecking=accept-new >/dev/null 2>&1; then
+    _WT_SSH_ACCEPT_NEW_SUPPORTED=1
+    return 0
+  fi
+
+  if ssh -G 127.0.0.1 -o BatchMode=yes -o StrictHostKeyChecking=accept-new 2>&1 | grep -qi "unsupported option \"accept-new\""; then
+    _WT_SSH_ACCEPT_NEW_SUPPORTED=0
+    return 1
+  fi
+
+  _WT_SSH_ACCEPT_NEW_SUPPORTED=0
+  return 1
+}
+
 ssh_run() {
   local address="$1"
   local ssh_user="${2:-}"
@@ -54,11 +76,15 @@ ssh_run() {
   local -a ssh_args
   ssh_args=(
     -o BatchMode=yes
-    -o StrictHostKeyChecking=accept-new
+    -o StrictHostKeyChecking=no
     -o ConnectTimeout="$connect_timeout_secs"
     -o ServerAliveInterval=10
     -o ServerAliveCountMax=1
   )
+
+  if ssh_supports_accept_new; then
+    ssh_args[1]='-o StrictHostKeyChecking=accept-new'
+  fi
 
   if [[ -n "$ssh_port" ]]; then
     ssh_args+=( -p "$ssh_port" )
