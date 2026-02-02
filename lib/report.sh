@@ -67,7 +67,11 @@ EOF
 
   if [[ -f "$summary_path" ]]; then
     if command -v jq >/dev/null 2>&1; then
-      jq -r '.findings[]? | "- [" + .severity + "] " + .title + " (" + .evidence + ")"' "$summary_path" >>"$report_path" || true
+      if jq -e . "$summary_path" >/dev/null 2>&1; then
+        jq -r '.findings[]? | "- [" + .severity + "] " + .title + " (" + .evidence + ")"' "$summary_path" >>"$report_path" || true
+      else
+        echo "- summary.json is not valid JSON" >>"$report_path"
+      fi
     else
       grep -E '"severity"|"title"|"evidence"' "$summary_path" >>"$report_path" || true
     fi

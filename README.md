@@ -22,6 +22,25 @@ Runner machine (where you execute `bin/watchtower`):
 - Common tools: `grep`, `awk`, `sed`, `date`, `head`, `tail`
 - Recommended:
   - `jq` (improves JSON parsing)
+
+Install `jq` (examples):
+
+```bash
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install -y jq
+
+# RHEL/CentOS/Rocky/Alma
+sudo yum install -y jq
+
+# Fedora
+sudo dnf install -y jq
+
+# Arch
+sudo pacman -S --noconfirm jq
+
+# Alpine
+sudo apk add jq
+```
 - Optional:
   - `mailx` or a sendmail-compatible MTA (email alerts)
   - `curl` + `jq` (AI summary via ChatGPT API)
@@ -33,6 +52,11 @@ Remote hosts:
 ## Installation
 
 1) Clone the repository.
+
+```bash
+git clone https://github.com/nitroxgas/serverWatchTower.git
+cd serverWatchTower
+```
 
 2) Ensure scripts are executable:
 
